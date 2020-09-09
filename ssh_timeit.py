@@ -8,6 +8,8 @@ import asyncio
 import paramiko
 
 from ssh2.session import Session
+import concurrent.futures
+import uvloop
 
 from netmiko import ConnectHandler
 from scrapli.driver.core import AsyncNXOSDriver, AsyncJunosDriver, AsyncEOSDriver
@@ -18,16 +20,15 @@ junos_sim = [
 ]
 
 cumulus_sim = [
-    {'host': '192.168.123.221'},
-    {'host': '192.168.123.94'},
-    {'host': '192.168.123.160'},
-    {'host': '192.168.123.148'},
-    {'host': '192.168.123.70'},
-    {'host': '192.168.123.212'},
-    {'host': '192.168.123.76'},
-    {'host': '192.168.123.149'},
-    {'host': '192.168.123.153'},
-    {'host': '192.168.123.4'},
+    {'host': '192.168.123.168'},
+    {'host': '192.168.123.192'},
+    {'host': '192.168.123.196'},
+    {'host': '192.168.123.126'},
+    {'host': '192.168.123.5'},
+    {'host': '192.168.123.98'},
+    {'host': '192.168.123.245'},
+    {'host': '192.168.123.6'},
+    {'host': '192.168.123.219'},
 ]
 
 eos_sim = [
@@ -61,7 +62,8 @@ def netmiko_ssh(host, port=22, user='vagrant', password='vagrant'):
     }
 
     net_connect = ConnectHandler(**dev_connect)
-    output = net_connect.send_command(command, use_textfsm=False)
+    output = net_connect.send_command(command, use_textfsm=False,
+                                      expect_string=r'[>#]')
     net_connect.disconnect()
     # print(output)
 
@@ -169,11 +171,24 @@ async def async_run(func, num_hosts=1):
 
 def sync_run(func, num_hosts=1):
     """Synchronous version of driving the different async libraries"""
-    for i in range(num_hosts):
-        entry = use_sim[i]
-        func(entry['host'], port=entry.get('port', 22),
-             user=entry.get('user', 'vagrant'),
-             password=entry.get('password', 'vagrant'))
+    hosts = [entry['host'] for entry in use_sim[:num_hosts]]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        executor.map(func, hosts)
+
+    # for i in range(num_hosts):
+    #     entry = use_sim[i]
+    #     thread = threading.Thread(
+    #         target=func,
+    #         args=(entry['host'],),
+    #         kwargs=({'port': entry.get('port', 22),
+    #                  'user': entry.get('user', 'vagrant'),
+    #                  'password': entry.get('password', 'vagrant',)}),
+    #         daemon=True)
+    #     threads.append(thread)
+    #     thread.start()
+
+    # for thread in threads:
+    #     thread.join()
 
 
 if __name__ == '__main__':
@@ -201,71 +216,70 @@ if __name__ == '__main__':
         command = 'show version'
 
     print(f'Running single host timing for simulation: {sim_name}')
+    uvloop.install()
 
     t = Timer("""asyncio.run(async_run(async_ssh))""", globals=globals())
-    assh_time = t.timeit(number=repeat_test)
+    assh_time = t.repeat(repeat=repeat_test, number=1)
 
     try:
         t = Timer("""sync_run(ssh2_ssh)""", globals=globals())
-        ssh2_time = t.timeit(number=repeat_test)
+        ssh2_time = t.repeat(repeat=repeat_test, number=1)
     except Exception:
         print('ssh2 execution failed')
-        t.print_exc()
-        ssh2_time = -1
+        ssh2_time = [-1]
 
     t = Timer("""sync_run(paramiko_ssh)""", globals=globals())
-    paramiko_time = t.timeit(number=repeat_test)
+    paramiko_time = t.repeat(repeat=repeat_test, number=1)
 
     t = Timer("""sync_run(netmiko_ssh)""", globals=globals())
-    netmiko_time = t.timeit(number=repeat_test)
+    netmiko_time = t.repeat(repeat=repeat_test, number=1)
 
     if use_sim != cumulus_sim:
         t = Timer("""asyncio.run(async_run(scrapli_ssh))""", globals=globals())
-        scrapli_time = t.timeit(number=repeat_test)
+        scrapli_time = t.repeat(repeat=repeat_test, number=1)
     else:
-        scrapli_time = -1
+        scrapli_time = [-1]
 
-    print(f'SINGLE HOST RUN(Avg of {repeat_test} runs)')
+    print(f'SINGLE HOST RUN(Min of {repeat_test} runs)')
     print('-------------------------------------------')
-    print(f'asyncssh: {assh_time}')
-    print(f'scrapli: {scrapli_time}')
-    print(f'ssh2: {ssh2_time}')
-    print(f'paramiko: {paramiko_time}')
-    print(f'netmiko: {netmiko_time}')
+    print(f'asyncssh: {min(assh_time)}')
+    print(f'scrapli: {min(scrapli_time)}')
+    print(f'ssh2: {min(ssh2_time)}')
+    print(f'paramiko: {min(paramiko_time)}')
+    print(f'netmiko: {min(netmiko_time)}')
     print()
 
     print(f'Running multi-host timing for simulation: {sim_name}, '
           f'{len(use_sim)} hosts')
 
+    t = Timer("""sync_run(paramiko_ssh, len(use_sim))""", globals=globals())
+    paramiko_time = t.repeat(repeat=repeat_test, number=3)
+
+    t = Timer("""asyncio.run(async_run(async_ssh, len(use_sim)))""",
+              globals=globals())
+    assh_time = t.repeat(repeat=repeat_test, number=3)
+
     t = Timer("""sync_run(ssh2_ssh, len(use_sim))""", globals=globals())
     try:
-        ssh2_time = t.timeit(number=repeat_test)
+        ssh2_time = t.repeat(repeat=repeat_test, number=3)
     except Exception:
         print('ssh2 execution failed')
-        t.print_exc()
-        ssh2_time = -1
-
-    t = Timer("""sync_run(paramiko_ssh, len(use_sim))""", globals=globals())
-    paramiko_time = t.timeit(number=repeat_test)
+        ssh2_time = [-1]
 
     t = Timer("""sync_run(netmiko_ssh, len(use_sim))""", globals=globals())
-    netmiko_time = t.timeit(number=repeat_test)
+    netmiko_time = t.repeat(repeat=repeat_test, number=3)
 
     if use_sim != cumulus_sim:
         t = Timer("""asyncio.run(async_run(scrapli_ssh, len(use_sim)))""",
                   globals=globals())
-        scrapli_time = t.timeit(number=repeat_test)
+        scrapli_time = t.repeat(repeat=repeat_test, number=3)
     else:
-        scrapli_time = -1
+        scrapli_time = [-1]
 
-    t = Timer("""asyncio.run(async_run(async_ssh, len(use_sim)))""",
-              globals=globals())
-    assh_time = t.timeit(number=repeat_test)
-
-    print(f'MULTI HOST RUN(Avg of {repeat_test} runs)')
+    print(f'MULTI HOST RUN(Min of {repeat_test} runs)')
     print('------------------------------------------')
-    print(f'asyncssh: {assh_time}')
-    print(f'scrapli: {scrapli_time}')
-    print(f'ssh2: {ssh2_time}')
-    print(f'paramiko: {paramiko_time}')
-    print(f'netmiko: {netmiko_time}')
+    print(f'asyncssh: {min(assh_time)}')
+    print(f'scrapli: {min(scrapli_time)}')
+    print(f'ssh2: {min(ssh2_time)}')
+    print(f'paramiko: {min(paramiko_time)}')
+    print(f'netmiko: {min(netmiko_time)}')
