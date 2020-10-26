@@ -12,6 +12,9 @@ from ssh2.session import Session
 from netmiko import ConnectHandler
 from scrapli.driver.core import AsyncNXOSDriver, AsyncJunosDriver, AsyncEOSDriver
 
+# ansible-pylibssh (https://github.com/ansible/pylibssh)
+from pylibsshext.session import Session
+
 junos_sim = [
     {'host': '127.0.0.1', 'port': 2200, 'user': 'vagrant', 'password': 'vagrant21'},
     {'host': '127.0.0.1', 'port': 2204, 'user': 'vagrant', 'password': 'vagrant21'},
@@ -167,6 +170,19 @@ async def async_run(func, num_hosts=1):
     await asyncio.gather(*tasks)
 
 
+def ansible_pylibssh_ssh(host, port=22, user='vagrant', password='vagrant'):
+
+    global command
+
+    ssh = Session()
+    ssh.connect(host=host, port=port, user=user, password=password)
+    channel = ssh.new_shell_channel()
+    channel.sendall(command)
+    output = channel.recv().decode("utf-8").strip()
+    channel.close()
+    # print(f'{host}, {output}, 0')
+
+
 def sync_run(func, num_hosts=1):
     """Synchronous version of driving the different async libraries"""
     for i in range(num_hosts):
@@ -225,6 +241,9 @@ if __name__ == '__main__':
     else:
         scrapli_time = -1
 
+    t = Timer("""sync_run(ansible_pylibssh_ssh)""", globals=globals())
+    ansible_pylibssh_time = t.timeit(number=repeat_test)
+
     print(f'SINGLE HOST RUN(Avg of {repeat_test} runs)')
     print('-------------------------------------------')
     print(f'asyncssh: {assh_time}')
@@ -232,6 +251,7 @@ if __name__ == '__main__':
     print(f'ssh2: {ssh2_time}')
     print(f'paramiko: {paramiko_time}')
     print(f'netmiko: {netmiko_time}')
+    print(f'ansible-pylibssh: {ansible_pylibssh_time}')
     print()
 
     print(f'Running multi-host timing for simulation: {sim_name}, '
@@ -262,6 +282,9 @@ if __name__ == '__main__':
               globals=globals())
     assh_time = t.timeit(number=repeat_test)
 
+    t = Timer("""sync_run(ansible_pylibssh_ssh, len(use_sim))""", globals=globals())
+    ansible_pylibssh_time = t.timeit(number=repeat_test)
+
     print(f'MULTI HOST RUN(Avg of {repeat_test} runs)')
     print('------------------------------------------')
     print(f'asyncssh: {assh_time}')
@@ -269,3 +292,4 @@ if __name__ == '__main__':
     print(f'ssh2: {ssh2_time}')
     print(f'paramiko: {paramiko_time}')
     print(f'netmiko: {netmiko_time}')
+    print(f'ansible-pylibssh: {ansible_pylibssh_time}')
